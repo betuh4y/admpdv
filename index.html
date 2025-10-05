@@ -1334,6 +1334,7 @@
                 <th>Preço venda</th>
                 <th>NCM</th>
                 <th>CS</th>
+                <th>Mapear para</th>
                 <th>Ações</th>
               </tr>
             </thead>
@@ -1454,6 +1455,7 @@
                   <th>Preço venda</th>
                   <th>NCM</th>
                   <th>CS</th>
+                  <th>Mapear para</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -3153,11 +3155,12 @@
             const markup = 0.00; // Placeholder
             const precoVenda = 0.00; // Placeholder
             const cs = ''; // Placeholder
+            const cProd = prod ? prod.getElementsByTagNameNS(ns, 'cProd')[0]?.textContent : '';
             const row = document.createElement('tr');
             row.innerHTML = `
               <td>${index + 1}</td>
               <td>${det.getAttribute('nItem')}</td>
-              <td>${prod ? prod.getElementsByTagNameNS(ns, 'cProd')[0]?.textContent : ''}</td>
+              <td><input type="text" class="editable codigo" value="${cProd}"></td>
               <td>${prod ? prod.getElementsByTagNameNS(ns, 'xProd')[0]?.textContent : ''}</td>
               <td><input type="text" class="editable qtd" value="${qtd.toFixed(2).replace('.', ',')}"></td>
               <td><input type="text" class="editable unid" value="${unid}"></td>
@@ -3171,6 +3174,12 @@
               <td><span>R$</span> <input type="text" class="editable precoVenda" value="${precoVenda.toFixed(2).replace('.', ',')}"></td>
               <td>${prod ? prod.getElementsByTagNameNS(ns, 'NCM')[0]?.textContent : ''}</td>
               <td><input type="text" class="editable cs" value="${cs}"></td>
+              <td>
+                <select class="mapTo" onchange="mapProduct(this)">
+                  <option value="">Novo Produto</option>
+                  ${Object.entries(productsDatabase).map(([bc, p]) => `<option value="${bc}" data-unit="${p.unidade}" data-price="${p.preco}">${p.nome} (${bc})</option>`).join('')}
+                </select>
+              </td>
               <td><button onclick="removeProductRow(this)">Remover</button></td>
             `;
             tbody.appendChild(row);
@@ -3283,6 +3292,21 @@
         const remaining = (totalNotaValue - sumDup).toFixed(2).replace('.', ',');
         document.getElementById('remaining').textContent = `R$ ${remaining}`;
       }
+
+      window.mapProduct = (select) => {
+        const row = select.closest('tr');
+        const selectedOption = select.options[select.selectedIndex];
+        if (selectedOption.value) {
+          // Atualiza o código para o barcode selecionado
+          row.querySelector('.codigo').value = selectedOption.value;
+          // Atualiza unidade e preço venda se desejado (opcional)
+          row.querySelector('.unid').value = selectedOption.dataset.unit === 'kilo' ? 'KG' : 'UN'; // Ajuste conforme necessário
+          row.querySelector('.precoVenda').value = selectedOption.dataset.price.replace('.', ',');
+          // Usuário pode ajustar qtd manualmente para conversão, se necessário
+          alert('Produto mapeado! Ajuste a quantidade se houver conversão necessária (ex: caixa para kg).');
+        }
+      };
+
       window.confirmarNota = () => {
         // Validação para evitar entradas vazias
         const totalNota = document.getElementById('totalNota').value.trim();
@@ -3308,7 +3332,7 @@
           notaData.produtos.push({
             ordem: row.cells[0].textContent,
             id: row.cells[1].textContent,
-            codigo: row.cells[2].textContent,
+            codigo: row.querySelector('.codigo').value, // Usa o código editado ou mapeado
             produto: row.cells[3].textContent,
             qtd: row.querySelector('.qtd').value.replace(',', '.'),
             unid: row.querySelector('.unid').value,
@@ -3321,7 +3345,8 @@
             markup: row.querySelector('.markup').value.replace(',', '.'),
             precoVenda: row.querySelector('.precoVenda').value.replace(',', '.'),
             ncm: row.cells[14].textContent,
-            cs: row.querySelector('.cs').value
+            cs: row.querySelector('.cs').value,
+            mappedTo: row.querySelector('.mapTo').value // Salva o mapeamento se usado
           });
         });
         const dupRows = document.querySelectorAll('#duplicatasTable tbody tr');
@@ -3341,7 +3366,7 @@
             // Atualizar estoque dos produtos
             const updates = {};
             notaData.produtos.forEach(prod => {
-              const barcode = prod.codigo;
+              const barcode = prod.mappedTo || prod.codigo; // Usa mapeado se existir
               const productRef = ref(db, `produtos/${user.uid}/${barcode}`);
               onValue(productRef, snapshot => {
                 let currentStock = 0;
@@ -3506,6 +3531,7 @@
             <td>R$ ${prod.precoVenda.replace('.', ',')}</td>
             <td>${prod.ncm}</td>
             <td>${prod.cs}</td>
+            <td>${prod.mappedTo || 'N/A'}</td>
           `;
           tbody.appendChild(row);
         });
