@@ -1135,6 +1135,7 @@
         <button id="registerCashOperationBtn">Registrar Operação</button>
         <div id="cashOperationsList"></div>
         <h4>Fechamento de Caixa</h4>
+        <input type="text" id="closerName" placeholder="Nome do Operador que Fecha o Caixa">
         <input type="number" id="finalCashCount" placeholder="Contagem Final de Dinheiro (R$)" step="0.01">
         <button id="closeCashBtn">Visualizar Relatório de Fechamento</button>
         <div id="closingReportSection" style="display:none;">
@@ -1647,7 +1648,8 @@
         set,
         update,
         onValue,
-        remove
+        remove,
+        runTransaction
       } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
       const firebaseConfig = {
         apiKey: "AIzaSyDJBdK9I-jtg9ujTc9Xsxr-hnPfkId4wIU",
@@ -1671,6 +1673,9 @@
       let cashOpened = false;
       let initialCash = 0;
       let openerName = '';
+      let closerName = '';
+      let openingTimestamp = '';
+      let closingTimestamp = '';
       let cashOperations = [];
       let dailySalesByPayment = {
         Pix: 0,
@@ -2140,37 +2145,45 @@
             const newStock = currentStock - item.quantidade;
             updates[productRef + '/estoque'] = newStock; // Permite estoque negativo
           });
-          // Salvar a venda e atualizar o estoque
-          const saleData = {
-            dataVenda: dataVenda,
-            valorTotal: total,
-            tipoPagamento: paymentType,
-            items: activeSaleItems.map(item => ({
-              codigo: item.codigo,
-              nome: item.nome,
-              preco: item.preco,
-              quantidade: item.quantidade,
-              unidade: item.unidade
-            })),
-            observacoes: "Venda PDV",
-            adjustment: adjustmentValue
-          };
-          const baseRef = ref(db, `vendas/${user.uid}`);
-          const newSaleRef = push(baseRef);
-          Promise.all([
-              set(newSaleRef, saleData),
-              update(ref(db), updates)
-            ])
-            .then(() => {
-              alert("Venda registrada e estoque atualizado com sucesso!");
-              printSaleReceipt(saleData, amountGiven);
-              updateDailySalesByPayment(paymentType, total);
-              cancelActiveSale();
-              document.getElementById("paymentModal").style.display = "none";
-              loadAllSalesAndFilter(user.uid);
-              loadProductsFromDatabase(user.uid); // Recarrega produtos para atualizar a interface
-            })
-            .catch(err => alert("Erro ao registrar venda ou atualizar estoque: " + err.message));
+          // Obter e incrementar o contador de vendas
+          const counterRef = ref(db, `counters/${user.uid}/saleNumber`);
+          runTransaction(counterRef, (current) => {
+            return (current || 0) + 1;
+          }).then((transaction) => {
+            const saleNumber = transaction.snapshot.val();
+            // Salvar a venda com o número
+            const saleData = {
+              saleNumber: saleNumber,
+              dataVenda: dataVenda,
+              valorTotal: total,
+              tipoPagamento: paymentType,
+              items: activeSaleItems.map(item => ({
+                codigo: item.codigo,
+                nome: item.nome,
+                preco: item.preco,
+                quantidade: item.quantidade,
+                unidade: item.unidade
+              })),
+              observacoes: "Venda PDV",
+              adjustment: adjustmentValue
+            };
+            const baseRef = ref(db, `vendas/${user.uid}`);
+            const newSaleRef = push(baseRef);
+            Promise.all([
+                set(newSaleRef, saleData),
+                update(ref(db), updates)
+              ])
+              .then(() => {
+                alert("Venda registrada e estoque atualizado com sucesso!");
+                printSaleReceipt(saleData, amountGiven);
+                updateDailySalesByPayment(paymentType, total);
+                cancelActiveSale();
+                document.getElementById("paymentModal").style.display = "none";
+                loadAllSalesAndFilter(user.uid);
+                loadProductsFromDatabase(user.uid); // Recarrega produtos para atualizar a interface
+              })
+              .catch(err => alert("Erro ao registrar venda ou atualizar estoque: " + err.message));
+          }).catch(err => alert("Erro ao gerar número da venda: " + err.message));
         } else {
           alert("Você precisa estar logado para registrar vendas.");
         }
@@ -2195,9 +2208,7 @@
       }
 
       function printSaleReceipt(sale, amountGiven) {
-        const {
-          jsPDF
-        } = window.jspdf;
+        const { jsPDF } = window.jspdf;
         const doc = new jsPDF();
         const shopName = "VIDA SAUDAVEL";
         const dateTime = new Date(sale.dataVenda).toLocaleString('pt-BR');
@@ -2205,11 +2216,11 @@
         const margin = 10;
         const lineHeight = 7;
         doc.setFontSize(14);
-        doc.text(shopName, doc.internal.pageSize.getWidth() / 2, yPos, {
-          align: 'center'
-        });
+        doc.text(shopName, doc.internal.pageSize.getWidth() / 2, yPos, { align: 'center' });
         yPos += lineHeight;
         doc.setFontSize(10);
+        doc.text(`Venda Nº: ${sale.saleNumber || 'N/A'}`, margin, yPos);
+        yPos += lineHeight;
         doc.text(`Data: ${dateTime}`, margin, yPos);
         yPos += lineHeight;
         doc.text("-----------------------------------------", margin, yPos);
@@ -2221,9 +2232,7 @@
             `${(item.quantidade * 1000).toFixed(0)}g` :
             `${item.quantidade} un`;
           doc.text(`${item.numero}. ${item.nome} (${quantidadeDisplay})`, margin, yPos);
-          doc.text(`R$ ${item.preco.toFixed(2).replace('.', ',')}`, doc.internal.pageSize.getWidth() - margin, yPos, {
-            align: 'right'
-          });
+          doc.text(`R$ ${item.preco.toFixed(2).replace('.', ',')}`, doc.internal.pageSize.getWidth() - margin, yPos, { align: 'right' });
           yPos += lineHeight;
         });
         doc.text("-----------------------------------------", margin, yPos);
@@ -2244,9 +2253,7 @@
         doc.text("-----------------------------------------", margin, yPos);
         yPos += lineHeight;
         doc.setFontSize(10);
-        doc.text("Obrigado pela preferência!", doc.internal.pageSize.getWidth() / 2, yPos, {
-          align: 'center'
-        });
+        doc.text("Obrigado pela preferência!", doc.internal.pageSize.getWidth() / 2, yPos, { align: 'center' });
         doc.save(`venda_${new Date(sale.dataVenda).getTime()}.pdf`);
       }
       // --- Gerenciamento de Caixa ---
@@ -2258,6 +2265,9 @@
             const data = snapshot.val();
             cashOpened = data.finalCash === undefined;
             openerName = data.openerName || '';
+            closerName = data.closerName || '';
+            openingTimestamp = data.openingTimestamp || '';
+            closingTimestamp = data.closingTimestamp || '';
             initialCash = data.initial || 0;
             cashOperations = data.operations || [];
             dailySalesByPayment = data.salesByPayment || {
@@ -2281,13 +2291,18 @@
               document.getElementById("exportClosingPdfBtn").style.display = "inline-block";
               document.getElementById("confirmClosingBtn").style.display = "none";
               document.getElementById("cancelClosingBtn").style.display = "none";
+              document.getElementById("closerName").disabled = true;
             } else {
               document.getElementById("closingReportSection").style.display = "none";
               document.getElementById("cashOperationsList").style.display = "block";
+              document.getElementById("closerName").disabled = false;
             }
           } else {
             cashOpened = false;
             openerName = '';
+            closerName = '';
+            openingTimestamp = '';
+            closingTimestamp = '';
             initialCash = 0;
             cashOperations = [];
             dailySalesByPayment = {
@@ -2326,6 +2341,7 @@
           set(cashRef, {
             openerName: name,
             initial: amount,
+            openingTimestamp: new Date().toLocaleString('pt-BR'),
             operations: [],
             salesByPayment: {
               Pix: 0,
@@ -2399,6 +2415,12 @@
           alert("Caixa não aberto.");
           return;
         }
+        const name = document.getElementById("closerName").value.trim();
+        if (!name) {
+          alert("Informe o nome do operador que fecha o caixa.");
+          return;
+        }
+        closerName = name;
         const finalCashInput = parseFloat(document.getElementById("finalCashCount").value) || 0;
         let totalCashOperations = cashOperations.reduce((sum, op) => sum + op.amount, 0);
         let expectedCash = initialCash + dailySalesByPayment.Dinheiro + totalCashOperations;
@@ -2421,7 +2443,9 @@
           const cashRef = ref(db, `cash/${user.uid}/${today}`);
           update(cashRef, {
             finalCash: finalCash,
-            difference: difference
+            difference: difference,
+            closerName: closerName,
+            closingTimestamp: new Date().toLocaleString('pt-BR')
           }).then(() => {
             alert("Fechamento salvo!");
             document.getElementById("exportClosingPdfBtn").style.display = "inline-block";
@@ -2437,6 +2461,7 @@
         document.getElementById("closingReportSection").style.display = "none";
         document.getElementById("cashOperationsList").style.display = "block";
         document.getElementById("finalCashCount").value = "";
+        document.getElementById("closerName").value = "";
       };
 
       function displayClosingReport() {
@@ -2444,7 +2469,7 @@
         let expectedCash = initialCash + dailySalesByPayment.Dinheiro + totalCashOperations;
         const totalsDiv = document.getElementById("closingTotals");
         totalsDiv.innerHTML = `
-          <p>Aberto por: ${openerName}</p>
+          <p>Aberto por: ${openerName} em ${openingTimestamp}</p>
           <p>Suprimento Inicial: R$ ${initialCash.toFixed(2).replace('.', ',')}</p>
           <p>Vendas em Pix: R$ ${dailySalesByPayment.Pix.toFixed(2).replace('.', ',')}</p>
           <p>Vendas em Dinheiro: R$ ${dailySalesByPayment.Dinheiro.toFixed(2).replace('.', ',')}</p>
@@ -2454,6 +2479,7 @@
           <p>Total Operações de Caixa: R$ ${totalCashOperations.toFixed(2).replace('.', ',')}</p>
           <p>Caixa Esperado (a manter em dinheiro): R$ ${expectedCash.toFixed(2).replace('.', ',')}</p>
           <p>Contagem Final: R$ ${finalCash.toFixed(2).replace('.', ',')}</p>
+          <p>Fechado por: ${closerName} em ${closingTimestamp}</p>
         `;
         document.getElementById("cashDifference").textContent = `Diferença: R$ ${difference.toFixed(2).replace('.', ',')}`;
       }
@@ -2469,7 +2495,7 @@
         doc.text(`Data: ${today}`, 10, 20);
         const tableColumn = ["Descrição", "Valor (R$)"];
         const tableRows = [
-          ["Aberto por", openerName],
+          ["Aberto por", `${openerName} em ${openingTimestamp}`],
           ["Suprimento Inicial", initialCash.toFixed(2).replace('.', ',')],
           ["Vendas em Pix", dailySalesByPayment.Pix.toFixed(2).replace('.', ',')],
           ["Vendas em Dinheiro", dailySalesByPayment.Dinheiro.toFixed(2).replace('.', ',')],
@@ -2479,7 +2505,8 @@
           ["Total Operações de Caixa", cashOperations.reduce((sum, op) => sum + op.amount, 0).toFixed(2).replace('.', ',')],
           ["Caixa Esperado (a manter em dinheiro)", (initialCash + dailySalesByPayment.Dinheiro + cashOperations.reduce((sum, op) => sum + op.amount, 0)).toFixed(2).replace('.', ',')],
           ["Contagem Final", finalCash.toFixed(2).replace('.', ',')],
-          ["Diferença", difference.toFixed(2).replace('.', ',')]
+          ["Diferença", difference.toFixed(2).replace('.', ',')],
+          ["Fechado por", `${closerName} em ${closingTimestamp}`]
         ];
         doc.autoTable({
           head: [tableColumn],
@@ -2499,6 +2526,9 @@
               allCashData.push({
                 date,
                 openerName: dayData.openerName || '',
+                openingTimestamp: dayData.openingTimestamp || '',
+                closerName: dayData.closerName || '',
+                closingTimestamp: dayData.closingTimestamp || '',
                 initial: dayData.initial || 0,
                 operations: dayData.operations || [],
                 salesByPayment: dayData.salesByPayment || {
@@ -2531,13 +2561,15 @@
           const dayDateParts = day.date.split('-');
           const dayDate = new Date(dayDateParts[0], dayDateParts[1] - 1, dayDateParts[2]);
           if ((!filterDateStart || dayDate >= filterDateStart) && (!filterDateEnd || dayDate <= filterDateEnd)) {
-            filteredCashOperations.push({
-              date: day.date,
-              type: 'abertura',
-              amount: day.initial,
-              note: `Aberto por: ${day.openerName}`
-            });
-            totalMov += day.initial;
+            if (filterType === "Todos" || filterType === "suprimento") {
+              filteredCashOperations.push({
+                date: day.date,
+                type: 'abertura',
+                amount: day.initial,
+                note: `Aberto por: ${day.openerName} em ${day.openingTimestamp}`
+              });
+              totalMov += day.initial;
+            }
             day.operations.forEach(op => {
               if (filterType === "Todos" || op.type === filterType) {
                 filteredCashOperations.push({
@@ -2547,12 +2579,12 @@
                 totalMov += op.amount;
               }
             });
-            if (day.finalCash !== 0) {
+            if (day.finalCash !== 0 && (filterType === "Todos" || filterType === "sangria")) {
               filteredCashOperations.push({
                 date: day.date,
                 type: 'fechamento',
                 amount: day.finalCash,
-                note: `Diferença: ${day.difference.toFixed(2).replace('.', ',')}`
+                note: `Fechado por: ${day.closerName || 'N/A'} em ${day.closingTimestamp} | Diferença: ${day.difference.toFixed(2).replace('.', ',')}`
               });
             }
           }
@@ -2574,7 +2606,7 @@
                   <td>${op.date}</td>
                   <td>${op.type}</td>
                   <td>${op.amount.toFixed(2).replace('.', ',')}</td>
-                  <td>${op.note}</td>
+                  <td>${op.note || op.timestamp + ' - ' + op.note}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -2650,23 +2682,31 @@
           alert("Por favor, preencha a data e hora da venda.");
           return;
         }
-        const data = {
-          dataVenda: dataVenda,
-          valorTotal: valorTotal,
-          tipoPagamento: tipoPagamento,
-          observacoes: observacoes,
-          items: []
-        };
         const user = auth.currentUser;
         if (user) {
-          const baseRef = ref(db, `vendas/${user.uid}`);
-          const newSaleRef = push(baseRef);
-          set(newSaleRef, data).then(() => {
-            alert("Venda registrada!");
-            updateDailySalesByPayment(tipoPagamento, valorTotal);
-            limparFormulario();
-            loadAllSalesAndFilter(user.uid);
-          }).catch(err => alert("Erro ao registrar venda: " + err.message));
+          // Obter e incrementar o contador de vendas
+          const counterRef = ref(db, `counters/${user.uid}/saleNumber`);
+          runTransaction(counterRef, (current) => {
+            return (current || 0) + 1;
+          }).then((transaction) => {
+            const saleNumber = transaction.snapshot.val();
+            const data = {
+              saleNumber: saleNumber,
+              dataVenda: dataVenda,
+              valorTotal: valorTotal,
+              tipoPagamento: tipoPagamento,
+              observacoes: observacoes,
+              items: []
+            };
+            const baseRef = ref(db, `vendas/${user.uid}`);
+            const newSaleRef = push(baseRef);
+            set(newSaleRef, data).then(() => {
+              alert("Venda registrada!");
+              updateDailySalesByPayment(tipoPagamento, valorTotal);
+              limparFormulario();
+              loadAllSalesAndFilter(user.uid);
+            }).catch(err => alert("Erro ao registrar venda: " + err.message));
+          }).catch(err => alert("Erro ao gerar número da venda: " + err.message));
         } else {
           alert("Você precisa estar logado para registrar vendas.");
         }
@@ -2722,6 +2762,7 @@
                 return `<li>${i.nome} (${quantidadeDisplay}, R$ ${i.preco.toFixed(2).replace('.', ',')})</li>`;
               }).join('') : '';
             div.innerHTML = `
+            <strong>Venda Nº:</strong> ${item.saleNumber || 'N/A'}<br>
             <strong>Data/Hora:</strong> ${item.dataVenda ? new Date(item.dataVenda).toLocaleString('pt-BR') : 'N/A'}<br>
             <strong>Valor Total:</strong> R$ ${item.valorTotal ? item.valorTotal.toFixed(2).replace('.', ',') : '0,00'}<br>
             <strong>Tipo de Pagamento:</strong> ${item.tipoPagamento}<br>
@@ -2980,7 +3021,7 @@
         const doc = new jsPDF();
         doc.setFontSize(16);
         doc.text("Relatório de Vendas Filtradas", 10, 10);
-        const tableColumn = ["Data/Hora", "Valor Total", "Tipo Pagamento", "Observações", "Itens"];
+        const tableColumn = ["Venda Nº", "Data/Hora", "Valor Total", "Tipo Pagamento", "Observações", "Itens"];
         const tableRows = [];
         filteredSalesData.forEach(sale => {
           const itemsList = sale.items && sale.items.length > 0 ?
@@ -2991,6 +3032,7 @@
               return `${item.nome} (${quantidadeDisplay}, R$ ${item.preco.toFixed(2).replace('.', ',')})`;
             }).join('\n') : 'N/A';
           const saleData = [
+            sale.saleNumber || 'N/A',
             sale.dataVenda ? new Date(sale.dataVenda).toLocaleString('pt-BR') : 'N/A',
             `R$ ${sale.valorTotal ? sale.valorTotal.toFixed(2).replace('.', ',') : '0,00'}`,
             sale.tipoPagamento,
@@ -3032,6 +3074,7 @@
               return `${item.nome} (${quantidadeDisplay}, R$ ${item.preco.toFixed(2).replace('.', ',')})`;
             }).join('; ') : '';
           return {
+            "Venda Nº": sale.saleNumber || 'N/A',
             "Data/Hora da Venda": sale.dataVenda ? new Date(sale.dataVenda).toLocaleString('pt-BR') : 'N/A',
             "Valor Total": sale.valorTotal,
             "Tipo de Pagamento": sale.tipoPagamento,
@@ -3056,6 +3099,7 @@
         }
         let reportMessage = "Relatório de Vendas Filtradas:\n\n";
         filteredSalesData.forEach(sale => {
+          reportMessage += `Venda Nº: ${sale.saleNumber || 'N/A'}\n`;
           reportMessage += `Data/Hora: ${sale.dataVenda ? new Date(sale.dataVenda).toLocaleString('pt-BR') : 'N/A'}\n`;
           reportMessage += `Valor Total: R$ ${sale.valorTotal ? sale.valorTotal.toFixed(2).replace('.', ',') : '0,00'}\n`;
           reportMessage += `Tipo de Pagamento: ${sale.tipoPagamento}\n`;
